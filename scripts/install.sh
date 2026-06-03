@@ -23,11 +23,16 @@ if [[ ! -f "$APP_DIR/config.json" ]]; then
   cp "$SOURCE_DIR/config.example.json" "$APP_DIR/config.json"
 fi
 
-print -n "Paste your Notion PAT (hidden; leave blank to keep existing Keychain token): "
-stty -echo
-read TOKEN
-stty echo
-print
+TOKEN="${NOTION_PAT:-}"
+if [[ -z "$TOKEN" && -t 0 ]]; then
+  print -n "Paste your Notion PAT (hidden; leave blank to keep existing Keychain token): "
+  stty -echo
+  read TOKEN
+  stty echo
+  print
+elif [[ -z "$TOKEN" ]]; then
+  print "No TTY detected; keeping any existing Keychain token."
+fi
 
 if [[ -n "$TOKEN" ]]; then
   security add-generic-password -a "$USER" -s "$SERVICE" -w "$TOKEN" -U >/dev/null

@@ -68,6 +68,9 @@ The installer will:
 The installer sets `--ignore-before` to the install time so old recordings are
 not uploaded accidentally on first launch.
 
+For non-interactive deployment, set `NOTION_PAT` before running the installer or
+leave it unset to keep an existing Keychain token.
+
 ## Check Setup
 
 ```bash
