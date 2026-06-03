@@ -40,7 +40,9 @@ DEFAULT_NOTION_ROOT = (
     "~/Library/Application Support/Notion/Partitions/notion"
 )
 DEFAULT_NOTION_DB = "~/Library/Application Support/Notion/notion.db"
-DEFAULT_ARCHIVE_DIR = "~/Documents/Notion AI Meeting Notes Archive"
+DEFAULT_ARCHIVE_DIR = (
+    "~/Library/Application Support/Notion AI Meeting Notes Archiver/Archive"
+)
 DEFAULT_NOTION_VERSION = "2026-03-11"
 DEFAULT_KEYCHAIN_SERVICE = "notion-ai-meeting-notes-archiver"
 RAW_SAMPLE_RATE = 16_000

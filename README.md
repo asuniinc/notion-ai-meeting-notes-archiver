@@ -119,7 +119,7 @@ Create `config.json` from `config.example.json` for local development:
 {
   "notion_root": "~/Library/Application Support/Notion/Partitions/notion",
   "notion_db": "~/Library/Application Support/Notion/notion.db",
-  "archive_dir": "~/Documents/Notion AI Meeting Notes Archive",
+  "archive_dir": "~/Library/Application Support/Notion AI Meeting Notes Archiver/Archive",
   "notion_token_env": "NOTION_API_KEY",
   "notion_token_keychain_service": "notion-ai-meeting-notes-archiver",
   "notion_version": "2026-03-11",
@@ -161,7 +161,7 @@ Remove the installed app directory and Keychain token too:
 ./scripts/uninstall.sh --purge
 ```
 
-The uninstall script does not remove the user's archive under `~/Documents`.
+The uninstall script does not remove the user's archive unless `--purge` is used.
 
 ## Development Checks
 
