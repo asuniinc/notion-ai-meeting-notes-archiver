@@ -7,7 +7,13 @@ APP_DIR="$HOME/Library/Application Support/Notion AI Meeting Notes Archiver"
 LOG_DIR="$HOME/Library/Logs/Notion AI Meeting Notes Archiver"
 LAUNCH_AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 SOURCE_DIR="${0:A:h}/.."
-PYTHON="${PYTHON:-$(command -v python3)}"
+if [[ -n "${PYTHON:-}" ]]; then
+  :
+elif [[ -x /usr/bin/python3 ]]; then
+  PYTHON="/usr/bin/python3"
+else
+  PYTHON="$(command -v python3 || true)"
+fi
 
 if [[ -z "$PYTHON" ]]; then
   print -u2 "python3 was not found."

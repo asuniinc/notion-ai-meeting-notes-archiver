@@ -71,6 +71,9 @@ not uploaded accidentally on first launch.
 For non-interactive deployment, set `NOTION_PAT` before running the installer or
 leave it unset to keep an existing Keychain token.
 
+The installer uses `/usr/bin/python3` by default when available. Set `PYTHON` to
+override the runtime path.
+
 ## Check Setup
 
 ```bash
