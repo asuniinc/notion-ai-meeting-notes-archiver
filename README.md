@@ -95,6 +95,63 @@ python3 notion_ai_meeting_notes_archiver.py --config config.json doctor --no-api
 
 `doctor` は状態とKeychain service名だけを表示します。トークン値は表示しません。
 
+指定したNotionページへ実際に書き込みできるか確認する場合:
+
+```bash
+python3 notion_ai_meeting_notes_archiver.py --config config.json doctor --test-page-id <NotionページIDまたはURL>
+```
+
+このチェックは小さなテスト用paragraphを追加し、すぐarchiveします。ページへのappend権限まで確認したいときに使います。
+
+## 更新方法
+
+このリポジトリを更新して、インストール先とLaunchAgentへ反映します。
+
+```bash
+cd /path/to/notion-ai-meeting-notes-archiver
+git pull
+./scripts/install.sh
+```
+
+`install.sh` は既存のKeychain tokenと `--ignore-before` を引き継ぎます。更新後は次を確認してください。
+
+```bash
+python3 notion_ai_meeting_notes_archiver.py --config "$HOME/Library/Application Support/Notion AI Meeting Notes Archiver/config.json" doctor
+```
+
+必要に応じて、テスト用ページへの書き込み確認も行います。
+
+```bash
+python3 notion_ai_meeting_notes_archiver.py \
+  --config "$HOME/Library/Application Support/Notion AI Meeting Notes Archiver/config.json" \
+  doctor \
+  --test-page-id <NotionページIDまたはURL>
+```
+
+## 再起動後確認
+
+Mac再起動後は、LaunchAgentが自動起動しているか確認します。
+
+```bash
+launchctl print "gui/$(id -u)/com.local.notion-ai-meeting-notes-archiver"
+```
+
+見るポイント:
+
+- `state = running`
+- `program = /usr/bin/python3`
+- `--min-size-mb 1` が引数に含まれている
+- stderrログが空、または新しいTracebackがない
+
+ログ確認:
+
+```bash
+tail -n 100 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.out.log"
+tail -n 100 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.err.log"
+```
+
+再起動後に短いテスト録音を作り、該当Notionページに音声が追加されることも確認してください。
+
 ## 手動コマンド
 
 最近の候補をスキャン:
@@ -153,6 +210,61 @@ python3 notion_ai_meeting_notes_archiver.py --config config.json cleanup-uploade
 - transcription blockによるページ推定は保守的です。近い時刻に複数候補がある場合は、推測でアップロードせずスキップします。
 - archive directoryごとに同時実行は1プロセスだけです。LaunchAgent処理中に手動実行すると、手動側はスキップされることがあります。
 - PATをplistへ貼った、コミットした、ログに出した、ターミナルに表示した可能性がある場合は、NotionでそのPATをrevokeし、新しいPATを発行してください。
+
+## トラブルシュート
+
+### `doctor` でNotion tokenが見つからない
+
+KeychainにPATが保存されていません。もう一度インストーラを実行してPATを入力してください。
+
+```bash
+./scripts/install.sh
+```
+
+非対話実行の場合:
+
+```bash
+NOTION_PAT="ntn_..." ./scripts/install.sh
+```
+
+### `doctor --test-page-id` が失敗する
+
+指定したページID/URLが正しいか、PATを作ったユーザーがそのページに書き込めるかを確認してください。PATが無効な場合はNotionで再発行し、Keychainへ保存し直してください。
+
+### LaunchAgentが動いていない
+
+plistが存在するか確認します。
+
+```bash
+ls "$HOME/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist"
+```
+
+再インストールします。
+
+```bash
+./scripts/install.sh
+```
+
+### ログにTracebackが出る
+
+stderrログを確認します。
+
+```bash
+tail -n 200 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.err.log"
+```
+
+更新後のバグ修正で解決している可能性があるため、まず `git pull && ./scripts/install.sh` を試してください。
+
+### 録音したのにアップロードされない
+
+- 録音が10秒未満だと対象外です。
+- LaunchAgentの引数に `--min-size-mb 1` が入っているか確認してください。
+- NotionのローカルDB反映に時間がかかることがあります。数分待ってログを確認してください。
+- `doctor --test-page-id` でページへの書き込み権限を確認してください。
+
+### PC負荷が高い
+
+通常時はCPUほぼ0%、メモリは数十MB程度です。CPUが継続的に高い場合はstderrログに例外が出ていないか確認し、最新版へ更新してください。
 
 ## アンインストール
 

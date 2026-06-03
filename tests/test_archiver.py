@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime as dt
 import sqlite3
 import tempfile
@@ -12,6 +14,25 @@ TZ = dt.datetime.now().astimezone().tzinfo
 
 def local_dt(hour: int, minute: int, second: int = 0) -> dt.datetime:
     return dt.datetime(2026, 6, 3, hour, minute, second, tzinfo=TZ)
+
+
+class FakeNotionClient(arch.NotionClient):
+    def __init__(self) -> None:
+        super().__init__("test-token")
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def request_json(
+        self,
+        method: str,
+        path_or_url: str,
+        body: dict[str, object] | None = None,
+        *,
+        expected: tuple[int, ...] = (200,),
+    ) -> dict[str, object]:
+        self.calls.append((method, path_or_url, body))
+        if method == "PATCH" and path_or_url.endswith("/children"):
+            return {"results": [{"id": "test-block-id"}]}
+        return {"id": "test-block-id"}
 
 
 class ArchiverTests(unittest.TestCase):
@@ -96,6 +117,29 @@ class ArchiverTests(unittest.TestCase):
         found = client.find_archived_audio_block("page-id", raw_sha, "recording.wav")
 
         self.assertEqual(found, {"marker_block_id": "paragraph-id", "uploaded_block_id": "audio-id"})
+
+    def test_extract_notion_id_from_url(self) -> None:
+        page_id = "374c120d8b74804c8df2ff78aefa2d49"
+        url = f"https://www.notion.so/example-page-{page_id}?pvs=4"
+
+        self.assertEqual(
+            arch.extract_notion_id(url),
+            "374c120d-8b74-804c-8df2-ff78aefa2d49",
+        )
+
+    def test_doctor_write_test_appends_and_archives_block(self) -> None:
+        client = FakeNotionClient()
+
+        ok, detail = arch.doctor_notion_write_test(
+            client,
+            "374c120d-8b74-804c-8df2-ff78aefa2d49",
+        )
+
+        self.assertTrue(ok, detail)
+        self.assertEqual(client.calls[0][0], "GET")
+        self.assertEqual(client.calls[1][0], "PATCH")
+        self.assertTrue(client.calls[1][1].endswith("/children"))
+        self.assertEqual(client.calls[2], ("DELETE", "/blocks/test-block-id", None))
 
     def test_delete_local_archive_files_counts_only_existing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

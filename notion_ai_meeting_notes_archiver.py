@@ -66,6 +66,10 @@ UUID_RE = re.compile(
     rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     rb"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
+TEXT_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}"
+)
 
 
 def expand(path: str | Path) -> Path:
@@ -153,6 +157,18 @@ def normalize_uuid(value: str) -> str | None:
         return str(uuid.UUID(compact))
     except ValueError:
         return None
+
+
+def extract_notion_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = normalize_uuid(value)
+    if normalized:
+        return normalized
+    matches = TEXT_UUID_RE.findall(value)
+    if not matches:
+        return None
+    return normalize_uuid(matches[-1])
 
 
 def sha256_file(path: Path, chunk_size: int = 2 * 1024 * 1024) -> str:
@@ -545,6 +561,8 @@ class NotionClient:
         except urllib.error.HTTPError as exc:
             payload = exc.read().decode("utf-8", errors="replace")
             raise NotionApiError(f"{method} {url} returned {exc.code}: {payload}") from exc
+        except urllib.error.URLError as exc:
+            raise NotionApiError(f"{method} {url} failed: {exc.reason}") from exc
         if not payload:
             return {}
         return json.loads(payload.decode("utf-8"))
@@ -604,6 +622,10 @@ class NotionClient:
             payload = exc.read().decode("utf-8", errors="replace")
             raise NotionApiError(
                 f"POST /file_uploads/{upload_id}/send returned {exc.code}: {payload}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise NotionApiError(
+                f"POST /file_uploads/{upload_id}/send failed: {exc.reason}"
             ) from exc
         return json.loads(payload.decode("utf-8"))
 
@@ -667,6 +689,30 @@ class NotionClient:
                 "uploaded_block_id": audio_block_id,
             }
         return None
+
+    def append_paragraph_block(self, page_or_block_id: str, text: str) -> dict[str, Any]:
+        return self.request_json(
+            "PATCH",
+            f"/blocks/{page_or_block_id}/children",
+            {
+                "children": [
+                    {
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [
+                                {
+                                    "type": "text",
+                                    "text": {"content": text},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    def archive_block(self, block_id: str) -> dict[str, Any]:
+        return self.request_json("DELETE", f"/blocks/{block_id}")
 
     def create_file_upload(self, path: Path, filename: str) -> dict[str, Any]:
         size = path.stat().st_size
@@ -1628,6 +1674,28 @@ def doctor_status(state: str, label: str, detail: str) -> None:
     print(f"{state}: {label}: {detail}")
 
 
+def doctor_notion_write_test(client: NotionClient, page_id_or_url: str) -> tuple[bool, str]:
+    page_id = extract_notion_id(page_id_or_url)
+    if not page_id:
+        return False, f"invalid Notion page ID or URL: {page_id_or_url}"
+    if not client.can_append_children(page_id):
+        return False, f"page cannot be found or appended to: {page_id}"
+    marker = f"Notion AI Meeting Notes Archiver doctor write test: {now_iso()}"
+    response = client.append_paragraph_block(page_id, marker)
+    results = response.get("results") or []
+    block_id = results[-1].get("id") if results else None
+    if not block_id:
+        return False, f"write succeeded but response did not include a block ID: {page_id}"
+    try:
+        client.archive_block(block_id)
+    except NotionApiError as exc:
+        return True, (
+            f"write succeeded on {page_id}, but cleanup failed for block "
+            f"{block_id}: {str(exc).splitlines()[0]}"
+        )
+    return True, f"appended and archived a test paragraph on {page_id}"
+
+
 def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
     notion_root = expand(args.notion_root or config.get("notion_root", DEFAULT_NOTION_ROOT))
     notion_db = expand(args.notion_db or config.get("notion_db", DEFAULT_NOTION_DB))
@@ -1682,12 +1750,14 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
         failures += 1
 
     token = keychain_token or env_token
+    client: NotionClient | None = None
     if token and not args.no_api:
         try:
-            me = NotionClient(
+            client = NotionClient(
                 token,
                 version=config.get("notion_version", DEFAULT_NOTION_VERSION),
-            ).request_json("GET", "/users/me")
+            )
+            me = client.request_json("GET", "/users/me")
             doctor_status(
                 "OK",
                 "Notion API",
@@ -1698,6 +1768,23 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
             failures += 1
     elif token:
         doctor_status("WARN", "Notion API", "skipped by --no-api")
+
+    if args.test_page_id:
+        if not token:
+            doctor_status("FAIL", "Notion write test", "Notion token is missing")
+            failures += 1
+        elif args.no_api:
+            doctor_status("FAIL", "Notion write test", "requires API; remove --no-api")
+            failures += 1
+        elif client:
+            try:
+                ok, detail = doctor_notion_write_test(client, args.test_page_id)
+            except NotionApiError as exc:
+                ok = False
+                detail = str(exc).splitlines()[0]
+            doctor_status("OK" if ok else "FAIL", "Notion write test", detail)
+            if not ok:
+                failures += 1
 
     launch_agent = (
         Path.home()
@@ -1761,6 +1848,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor", help="Check local setup and Notion API access")
     doctor.add_argument("--no-api", action="store_true", help="Skip Notion API request")
+    doctor.add_argument(
+        "--test-page-id",
+        help=(
+            "Append and immediately archive a small paragraph to verify Notion "
+            "write access for a page ID or URL"
+        ),
+    )
 
     watch = sub.add_parser("watch", help="Poll for new recordings")
     watch.add_argument("--include-unmatched", action="store_true")
