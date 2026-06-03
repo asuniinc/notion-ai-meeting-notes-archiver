@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.notion-ai-meeting-notes-archiver</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-u</string>
+    <string>__APP_DIR__/notion_ai_meeting_notes_archiver.py</string>
+    <string>--config</string>
+    <string>__APP_DIR__/config.json</string>
+    <string>--ignore-before</string>
+    <string>__IGNORE_BEFORE__</string>
+    <string>watch</string>
+    <string>--upload</string>
+    <string>--interval</string>
+    <string>60</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/notion-ai-meeting-notes-archiver.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/notion-ai-meeting-notes-archiver.err.log</string>
+</dict>
+</plist>

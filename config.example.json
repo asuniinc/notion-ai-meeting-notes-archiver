@@ -1,0 +1,10 @@
+{
+  "notion_root": "~/Library/Application Support/Notion/Partitions/notion",
+  "notion_db": "~/Library/Application Support/Notion/notion.db",
+  "archive_dir": "~/Documents/Notion AI Meeting Notes Archive",
+  "notion_token_env": "NOTION_API_KEY",
+  "notion_token_keychain_service": "notion-ai-meeting-notes-archiver",
+  "notion_version": "2026-03-11",
+  "delete_after_upload": true,
+  "fallback_page_id": null
+}
