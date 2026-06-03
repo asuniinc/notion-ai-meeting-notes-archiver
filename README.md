@@ -1,124 +1,129 @@
 # Notion AI Meeting Notes Archiver
 
-Notion desktop app can keep AI Meeting Notes recordings in its local Electron
-storage as raw audio data. This tool detects those local recordings, restores
-them as WAV files, matches them to the Notion page that created them, uploads the
-audio back to that page, and removes the local WAV after a successful upload.
+Notion AI Meeting Notes のローカル録音データを復元し、該当するNotionページへ音声ファイルとしてアップロードするための社内向けツールです。
 
-## Internal Sharing Status
+## 対応環境
 
-This tool is intended for trusted internal use on each user's own Mac.
+このツールは **macOS専用** です。Windowsでは動きません。
 
-- Each user should create their own Notion Personal Access Token (PAT).
-- The PAT is stored in macOS Keychain, not in the LaunchAgent plist.
-- A PAT acts with the permissions of the user who created it, so private AI
-  Meeting Notes pages do not need to be manually shared with a bot connection.
-- Do not commit `config.json`, generated LaunchAgent plists, logs, local WAVs, or
-  manifest databases.
+理由:
 
-Notion's PAT docs: https://developers.notion.com/guides/get-started/personal-access-tokens
+- NotionデスクトップアプリのmacOSローカル保存先を前提にしています。
+- 認証トークンの保存にmacOS Keychainを使います。
+- 常駐実行にmacOSのLaunchAgent/launchdを使います。
+- インストール/アンインストールスクリプトはzshとmacOS標準コマンドを前提にしています。
 
-## What It Does
+## 社内利用時の前提
 
-1. Scans Notion's local app storage:
+- 各ユーザーが自分のNotion Personal Access Token (PAT) を作成します。
+- PATはLaunchAgent plistではなく、macOS Keychainに保存します。
+- PATは作成したユーザー本人の権限で動くため、Notion AI Meeting Notes がプライベートページに作られても、都度bot connectionへ共有する必要がありません。
+- `config.json`、生成されたLaunchAgent plist、ログ、ローカルWAV、manifest DBはコミットしないでください。
+
+Notion PAT docs: https://developers.notion.com/guides/get-started/personal-access-tokens
+
+## 何をするツールか
+
+1. Notionデスクトップアプリのローカル保存先をスキャンします。
 
    ```text
    ~/Library/Application Support/Notion/Partitions/notion/File System/000/t
    ```
 
-2. Detects raw AI Meeting Notes audio:
+2. Notion AI Meeting Notes のraw音声データを検出します。
 
    ```text
    32-bit float little-endian
    mono
    16000 Hz
-   no WAV header
+   WAVヘッダーなし
    ```
 
-3. Restores each recording as a `.wav` file.
+3. raw音声を `.wav` ファイルとして復元します。
 
-4. Reads Notion's local `notion.db` snapshot to match old and recent recordings
-   to `audio` or `transcription` blocks.
+4. Notionのローカル `notion.db` のスナップショットを読み、`audio` ブロックや `transcription` ブロックから該当ページを推定します。
 
-5. Uses the Notion File Upload API to attach the WAV as an audio block.
+5. Notion File Upload APIを使って、該当ページへ音声ブロックとしてアップロードします。
 
-6. Writes a page-side archive marker containing the raw audio SHA-256. If the app
-   crashes after appending to Notion but before updating the local manifest, the
-   next run detects the marker and avoids a duplicate upload.
+6. Notionページ側にraw音声のSHA-256を含むアーカイブマーカーを残します。Notionへの追加後、ローカルmanifest更新前にプロセスが落ちても、次回実行時にページ側マーカーを見つけて重複アップロードを避けます。
 
-7. Keeps a local SQLite manifest so completed recordings are not regenerated.
+7. ローカルSQLite manifestを保持し、同じ録音を再生成・再アップロードしないようにします。
 
-## Install
+## インストール
 
-From this directory:
+このリポジトリのディレクトリで実行します。
 
 ```bash
 ./scripts/install.sh
 ```
 
-The installer will:
+インストーラが行うこと:
 
-- copy the app to `~/Library/Application Support/Notion AI Meeting Notes Archiver`
-- prompt for the user's Notion PAT and store it in Keychain service
-  `notion-ai-meeting-notes-archiver`
-- create `~/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist`
-- start a 60-second watch loop
-- run `doctor`
+- アプリを `~/Library/Application Support/Notion AI Meeting Notes Archiver` にコピーします。
+- Notion PATの入力を求め、Keychain service `notion-ai-meeting-notes-archiver` に保存します。
+- `~/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist` を作成します。
+- 60秒間隔の常駐監視を開始します。
+- `doctor` を実行してセットアップ状態を確認します。
 
-The installer sets `--ignore-before` to the install time on first install so old
-recordings are not uploaded accidentally. Re-runs preserve the existing
-`--ignore-before` value unless `IGNORE_BEFORE` is explicitly set. The LaunchAgent
-uses `--min-size-mb 1` so short test recordings are still detected.
+初回インストール時は `--ignore-before` にインストール時刻を設定します。これにより、過去の録音が初回起動で意図せず大量アップロードされることを防ぎます。再インストール時は既存の `--ignore-before` を引き継ぎます。明示的に変えたい場合は `IGNORE_BEFORE` を指定してください。
 
-For non-interactive deployment, set `NOTION_PAT` before running the installer or
-leave it unset to keep an existing Keychain token.
+LaunchAgentは `--min-size-mb 1` で動きます。短いテスト録音も検出するためです。
 
-The installer uses `/usr/bin/python3` by default when available. Set `PYTHON` to
-override the runtime path.
+非対話実行では、`NOTION_PAT` を設定してからインストーラを実行できます。未設定の場合は既存のKeychain tokenをそのまま使います。
 
-## Check Setup
+```bash
+NOTION_PAT="ntn_..." ./scripts/install.sh
+```
+
+Pythonは `/usr/bin/python3` を優先して使います。別のPythonを使いたい場合は `PYTHON` で指定してください。
+
+```bash
+PYTHON=/path/to/python3 ./scripts/install.sh
+```
+
+## セットアップ確認
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json doctor
 ```
 
-Use `--no-api` to skip the Notion API request:
+Notion APIへの疎通確認を省略する場合:
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json doctor --no-api
 ```
 
-`doctor` prints only status and service names. It never prints the token.
+`doctor` は状態とKeychain service名だけを表示します。トークン値は表示しません。
 
-## Manual Commands
+## 手動コマンド
 
-Scan recent candidates:
+最近の候補をスキャン:
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json --since-days 7 scan
 ```
 
-Archive and upload once:
+1回だけアーカイブしてアップロード:
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json archive --upload
 ```
 
-Watch continuously:
+常駐監視:
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json watch --upload --interval 60
 ```
 
-Delete local WAV and metadata files for already uploaded manifest records:
+アップロード済みmanifestレコードのローカルWAV/metadataを削除:
 
 ```bash
 python3 notion_ai_meeting_notes_archiver.py --config config.json cleanup-uploaded
 ```
 
-## Configuration
+## 設定
 
-Create `config.json` from `config.example.json` for local development:
+ローカル開発時は `config.example.json` をコピーして `config.json` を作ります。
 
 ```json
 {
@@ -133,42 +138,37 @@ Create `config.json` from `config.example.json` for local development:
 }
 ```
 
-Token lookup order:
+トークンの探索順:
 
-1. macOS Keychain generic password named by `notion_token_keychain_service`
-2. fallback environment variable named by `notion_token_env`
+1. `notion_token_keychain_service` で指定されたmacOS Keychain generic password
+2. `notion_token_env` で指定された環境変数
 
-The environment variable fallback is for development only. Internal installs
-should use Keychain.
+環境変数は開発用のフォールバックです。社内利用ではKeychainを使ってください。
 
-## Safety Notes
+## 安全上の注意
 
-- The tool reads local Notion desktop data, including page/block metadata needed
-  to find the matching page.
-- The local WAV exists only until upload when `delete_after_upload` is true.
-- The manifest database remains in the archive directory for deduplication.
-- Matching through transcription blocks is conservative. If two candidate pages
-  are too close in time, the recording is skipped instead of guessed.
-- One archiver process can run at a time per archive directory. Manual runs will
-  skip if the LaunchAgent is already processing.
-- If a PAT is ever pasted into a plist, committed, logged, or printed in a
-  terminal, revoke it in Notion and create a new one.
+- このツールは、該当ページを特定するためにNotionデスクトップアプリのローカルデータを読みます。
+- `delete_after_upload` がtrueの場合、復元したローカルWAVはアップロード成功後に削除されます。
+- manifest DBは重複処理を防ぐためにarchive directoryへ残ります。
+- transcription blockによるページ推定は保守的です。近い時刻に複数候補がある場合は、推測でアップロードせずスキップします。
+- archive directoryごとに同時実行は1プロセスだけです。LaunchAgent処理中に手動実行すると、手動側はスキップされることがあります。
+- PATをplistへ貼った、コミットした、ログに出した、ターミナルに表示した可能性がある場合は、NotionでそのPATをrevokeし、新しいPATを発行してください。
 
-## Uninstall
+## アンインストール
 
 ```bash
 ./scripts/uninstall.sh
 ```
 
-Remove the installed app directory and Keychain token too:
+インストール済みアプリディレクトリとKeychain tokenも削除する場合:
 
 ```bash
 ./scripts/uninstall.sh --purge
 ```
 
-The uninstall script does not remove the user's archive unless `--purge` is used.
+`--purge` を付けない場合、archiveは削除しません。
 
-## Development Checks
+## 開発時の確認
 
 ```bash
 python3 -m py_compile notion_ai_meeting_notes_archiver.py tests/test_archiver.py
@@ -176,11 +176,9 @@ python3 -m unittest discover -s tests
 plutil -lint launchd/com.local.notion-ai-meeting-notes-archiver.plist.template
 ```
 
-## Current Limitations
+## 現在の制限
 
-- The recorder detection depends on Notion desktop's internal storage format and
-  may need updates if Notion changes it.
-- File uploads that complete but fail before the audio block is appended may
-  leave an unattached Notion file upload. A later run uploads again, but it will
-  not create a duplicate page block unless the page-side marker is absent.
-- `--force` intentionally bypasses local and remote duplicate checks.
+- macOS専用です。Windows/Linuxには対応していません。
+- Notionデスクトップアプリの内部保存形式に依存しています。Notion側の実装が変わると更新が必要になる可能性があります。
+- File Upload自体は完了したが、その後の音声ブロック追加前に失敗した場合、Notion側に未紐付けのfile uploadが残る可能性があります。次回実行で再アップロードされますが、ページ側マーカーがある限り重複ブロックは作りません。
+- `--force` はローカル/リモートの重複チェックを意図的に無視します。
