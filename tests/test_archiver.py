@@ -138,6 +138,32 @@ class ArchiverTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_manifest_get_does_not_require_python_310_zip_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = arch.Manifest(Path(tmp))
+            metadata = {
+                "raw_path": "/tmp/raw",
+                "raw_size": 4,
+                "raw_mtime": 1.0,
+                "raw_sha256": "b" * 64,
+                "wav_path": "/tmp/meeting.wav",
+                "metadata_path": "/tmp/meeting.metadata.json",
+            }
+
+            manifest.upsert(metadata)
+            found = manifest.get("b" * 64)
+
+            self.assertIsNotNone(found)
+            self.assertEqual(found["raw_sha256"], "b" * 64)
+
+    def test_corrupt_notion_db_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "notion.db"
+            db_path.write_bytes(b"not a sqlite database")
+
+            self.assertEqual(arch.extract_db_audio_events(db_path), [])
+            self.assertEqual(arch.extract_db_transcription_contexts(db_path), [])
+
 
 if __name__ == "__main__":
     unittest.main()

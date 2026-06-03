@@ -433,7 +433,7 @@ class Manifest:
         if not row:
             return None
         columns = [info[1] for info in self.conn.execute("PRAGMA table_info(recordings)")]
-        return dict(zip(columns, row, strict=False))
+        return dict(zip(columns, row))
 
     def uploaded_records(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -445,7 +445,7 @@ class Manifest:
             """
         ).fetchall()
         columns = [info[1] for info in self.conn.execute("PRAGMA table_info(recordings)")]
-        return [dict(zip(columns, row, strict=False)) for row in rows]
+        return [dict(zip(columns, row)) for row in rows]
 
     def upsert(self, metadata: dict[str, Any]) -> None:
         now = now_iso()
@@ -845,7 +845,11 @@ class LocalNotionDb:
         self.db_path = db_path
         self._tmpdir = tempfile.TemporaryDirectory(prefix="notion-ai-notion-db-")
         self._snapshot_path = Path(self._tmpdir.name) / db_path.name
-        self._copy_sqlite_snapshot(db_path, self._snapshot_path)
+        try:
+            self._copy_sqlite_snapshot(db_path, self._snapshot_path)
+        except (OSError, sqlite3.Error):
+            self._tmpdir.cleanup()
+            raise
         uri = f"{self._snapshot_path.as_uri()}?mode=ro&immutable=1"
         try:
             self.conn = sqlite3.connect(uri, uri=True, timeout=5)
@@ -864,11 +868,15 @@ class LocalNotionDb:
     @staticmethod
     def _copy_sqlite_snapshot(src: Path, dst: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(f"{src}{suffix}")
-            if sidecar.exists():
-                shutil.copy2(sidecar, Path(f"{dst}{suffix}"))
+        source_uri = f"{src.as_uri()}?mode=ro"
+        source = sqlite3.connect(source_uri, uri=True, timeout=5)
+        target = sqlite3.connect(dst)
+        try:
+            source.execute("PRAGMA busy_timeout = 5000")
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
 
     def get_block(self, block_id: str) -> sqlite3.Row | None:
         return self.conn.execute(
@@ -1015,6 +1023,8 @@ def extract_db_audio_events(notion_db: Path) -> list[RecordingEvent]:
         return []
     try:
         return db.audio_recording_events()
+    except sqlite3.Error:
+        return []
     finally:
         db.close()
 
@@ -1028,6 +1038,8 @@ def extract_db_transcription_contexts(notion_db: Path) -> list[TranscriptionCont
         return []
     try:
         return db.transcription_contexts()
+    except sqlite3.Error:
+        return []
     finally:
         db.close()
 
