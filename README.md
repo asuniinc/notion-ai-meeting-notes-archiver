@@ -65,8 +65,10 @@ The installer will:
 - start a 60-second watch loop
 - run `doctor`
 
-The installer sets `--ignore-before` to the install time so old recordings are
-not uploaded accidentally on first launch.
+The installer sets `--ignore-before` to the install time on first install so old
+recordings are not uploaded accidentally. Re-runs preserve the existing
+`--ignore-before` value unless `IGNORE_BEFORE` is explicitly set. The LaunchAgent
+uses `--min-size-mb 1` so short test recordings are still detected.
 
 For non-interactive deployment, set `NOTION_PAT` before running the installer or
 leave it unset to keep an existing Keychain token.

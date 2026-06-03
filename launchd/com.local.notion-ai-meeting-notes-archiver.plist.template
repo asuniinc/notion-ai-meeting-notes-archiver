@@ -15,6 +15,8 @@
     <string>__APP_DIR__/config.json</string>
     <string>--ignore-before</string>
     <string>__IGNORE_BEFORE__</string>
+    <string>--min-size-mb</string>
+    <string>1</string>
     <string>watch</string>
     <string>--upload</string>
     <string>--interval</string>

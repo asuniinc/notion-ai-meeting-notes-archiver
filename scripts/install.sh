@@ -45,7 +45,19 @@ if [[ -n "$TOKEN" ]]; then
   print "Stored Notion PAT in macOS Keychain service '$SERVICE'."
 fi
 
-IGNORE_BEFORE="$("$PYTHON" -c 'import datetime as dt; print(dt.datetime.now().astimezone().isoformat(timespec="seconds"))')"
+EXISTING_IGNORE_BEFORE=""
+if [[ -f "$LAUNCH_AGENT" ]]; then
+  EXISTING_IGNORE_BEFORE="$(awk '
+    found {
+      gsub(/^[[:space:]]*<string>/, "")
+      gsub(/<\/string>[[:space:]]*$/, "")
+      print
+      exit
+    }
+    /<string>--ignore-before<\/string>/ { found = 1 }
+  ' "$LAUNCH_AGENT")"
+fi
+IGNORE_BEFORE="${IGNORE_BEFORE:-${EXISTING_IGNORE_BEFORE:-$("$PYTHON" -c 'import datetime as dt; print(dt.datetime.now().astimezone().isoformat(timespec="seconds"))')}}"
 
 cat > "$LAUNCH_AGENT" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -65,6 +77,8 @@ cat > "$LAUNCH_AGENT" <<PLIST
     <string>$APP_DIR/config.json</string>
     <string>--ignore-before</string>
     <string>$IGNORE_BEFORE</string>
+    <string>--min-size-mb</string>
+    <string>1</string>
     <string>watch</string>
     <string>--upload</string>
     <string>--interval</string>
