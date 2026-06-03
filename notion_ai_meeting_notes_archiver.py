@@ -1417,40 +1417,24 @@ def archive_once(args: argparse.Namespace, config: dict[str, Any]) -> int:
         except RuntimeError as exc:
             print(f"archive skipped: {exc}")
             return 1
-    events = extract_db_audio_events(notion_db) + extract_events(notion_root, args.since_days)
     candidates = scan_raw_candidates(
         notion_root,
         min_size=args.min_size_mb * 1024 * 1024,
         since_days=args.since_days,
         ignore_before=parse_local_datetime(args.ignore_before),
     )
-    match_events(candidates, events)
-    match_transcription_contexts(
-        candidates,
-        extract_db_transcription_contexts(notion_db),
-        notion_db,
-    )
-    if getattr(args, "only_transcription_matches", False):
-        candidates = [
-            candidate
-            for candidate in candidates
-            if candidate.event and ":transcription:" in candidate.event.source_path
-        ]
-    if not args.include_unmatched:
-        candidates = [candidate for candidate in candidates if candidate.event]
-    client = notion_client_from_config(config) if args.upload and not args.dry_run else None
-    fallback_page_id = args.fallback_page_id or config.get("fallback_page_id")
-    resolve_candidates(candidates, client, fallback_page_id)
     manifest = None if args.dry_run else Manifest(archive_dir)
     delete_after_upload = bool(config.get("delete_after_upload", False))
     uploaded = 0
     archived = 0
     skipped = 0
     deleted = 0
+    candidate_state: dict[str, tuple[str, dict[str, Any] | None]] = {}
+    pending_candidates: list[RawCandidate] = []
     for candidate in candidates:
         raw_sha256 = "" if args.dry_run else sha256_file(candidate.raw_path)
         existing = manifest.get(raw_sha256) if manifest else None
-        wav_path, metadata_path = build_archive_paths(archive_dir, candidate)
+        candidate_state[str(candidate.raw_path)] = (raw_sha256, existing)
         if existing and existing.get("uploaded_at") and args.upload and not args.force:
             existing_wav = Path(existing["wav_path"])
             existing_metadata = (
@@ -1465,6 +1449,30 @@ def archive_once(args: argparse.Namespace, config: dict[str, Any]) -> int:
             skipped += 1
             print(f"skip uploaded existing: {existing['wav_path']}")
             continue
+        pending_candidates.append(candidate)
+    candidates = pending_candidates
+    if candidates:
+        events = extract_db_audio_events(notion_db) + extract_events(notion_root, args.since_days)
+        match_events(candidates, events)
+        match_transcription_contexts(
+            candidates,
+            extract_db_transcription_contexts(notion_db),
+            notion_db,
+        )
+        if getattr(args, "only_transcription_matches", False):
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.event and ":transcription:" in candidate.event.source_path
+            ]
+        if not args.include_unmatched:
+            candidates = [candidate for candidate in candidates if candidate.event]
+    client = notion_client_from_config(config) if args.upload and not args.dry_run else None
+    fallback_page_id = args.fallback_page_id or config.get("fallback_page_id")
+    resolve_candidates(candidates, client, fallback_page_id)
+    for candidate in candidates:
+        raw_sha256, existing = candidate_state.get(str(candidate.raw_path), ("", None))
+        wav_path, metadata_path = build_archive_paths(archive_dir, candidate)
         if existing and Path(existing["wav_path"]).exists() and not args.force:
             wav_path = Path(existing["wav_path"])
             if existing.get("metadata_path"):
