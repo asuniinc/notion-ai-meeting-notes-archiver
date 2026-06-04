@@ -67,7 +67,7 @@ Notion PAT docs: https://developers.notion.com/guides/get-started/personal-acces
 
 初回インストール時は `--ignore-before` にインストール時刻を設定します。これにより、過去の録音が初回起動で意図せず大量アップロードされることを防ぎます。再インストール時は既存の `--ignore-before` を引き継ぎます。明示的に変えたい場合は `IGNORE_BEFORE` を指定してください。
 
-LaunchAgentは `--min-size-mb 1` で動きます。短いテスト録音も検出するためです。
+LaunchAgentは `--min-size-mb 1` で動きます。短いテスト録音も検出するためです。録音中のrawファイルを途中でアップロードしないよう、最終更新から600秒以上たって安定したファイルだけを処理します。明示的に変えたい場合は `MIN_STABLE_SECONDS` を指定してください。
 
 非対話実行では、`NOTION_PAT` を設定してからインストーラを実行できます。未設定の場合は既存のKeychain tokenをそのまま使います。
 
@@ -141,6 +141,7 @@ launchctl print "gui/$(id -u)/com.local.notion-ai-meeting-notes-archiver"
 - `state = running`
 - `program = /usr/bin/python3`
 - `--min-size-mb 1` が引数に含まれている
+- `--min-stable-seconds 600` が引数に含まれている
 - stderrログが空、または新しいTracebackがない
 
 ログ確認:
@@ -259,6 +260,7 @@ tail -n 200 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeti
 
 - 録音が10秒未満だと対象外です。
 - LaunchAgentの引数に `--min-size-mb 1` が入っているか確認してください。
+- 録音終了直後のファイルは未完成扱いになり、デフォルトで最終更新から600秒待ってから処理されます。手動検証で早めたい場合は `--min-stable-seconds` を小さくしてください。
 - NotionのローカルDB反映に時間がかかることがあります。数分待ってログを確認してください。
 - `doctor --test-page-id` でページへの書き込み権限を確認してください。
 

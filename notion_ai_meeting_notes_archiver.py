@@ -53,8 +53,10 @@ WAV_HEADER_BYTES = 44
 SINGLE_UPLOAD_LIMIT = 20 * 1024 * 1024
 MULTIPART_CHUNK_BYTES = 10 * 1024 * 1024
 RAW_MIN_DURATION_SECONDS = 10
+DEFAULT_MIN_STABLE_SECONDS = 600
 TRANSCRIPTION_MATCH_WINDOW_SECONDS = 45
 TRANSCRIPTION_AMBIGUITY_MARGIN_SECONDS = 15
+TRANSCRIPTION_EXACT_END_SECONDS = 1
 ARCHIVE_MARKER_PREFIX = "Notion AI Meeting Notes Archive ID:"
 
 AUDIO_NAME_RE = re.compile(
@@ -1155,8 +1157,10 @@ def scan_raw_candidates(
     min_size: int,
     since_days: int,
     ignore_before: dt.datetime | None = None,
+    min_stable_seconds: int = DEFAULT_MIN_STABLE_SECONDS,
 ) -> list[RawCandidate]:
     raw_root = notion_root / "File System" / "000" / "t"
+    now_ts = time.time()
     cutoff = time.time() - since_days * 24 * 60 * 60
     if ignore_before:
         cutoff = max(cutoff, ignore_before.timestamp())
@@ -1172,6 +1176,8 @@ def scan_raw_candidates(
         if path.name.startswith(".") or "Paths" in relative_parts:
             continue
         if stat.st_mtime < cutoff:
+            continue
+        if min_stable_seconds > 0 and now_ts - stat.st_mtime < min_stable_seconds:
             continue
         if not is_plausible_raw_pcm(path, min_size=min_size):
             continue
@@ -1254,7 +1260,13 @@ def match_transcription_contexts(
             len(matches) > 1
             and matches[1][0] - best[0] < TRANSCRIPTION_AMBIGUITY_MARGIN_SECONDS
         ):
-            continue
+            exact_end_match = (
+                best[1].startswith("end_delta=")
+                and best[0] <= TRANSCRIPTION_EXACT_END_SECONDS
+                and matches[1][0] > TRANSCRIPTION_EXACT_END_SECONDS
+            )
+            if not exact_end_match:
+                continue
         _, reason, context = best
         ids = [context.block_id]
         if context.page_id:
@@ -1398,6 +1410,7 @@ def scan_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
         min_size=args.min_size_mb * 1024 * 1024,
         since_days=args.since_days,
         ignore_before=parse_local_datetime(args.ignore_before),
+        min_stable_seconds=args.min_stable_seconds,
     )
     match_events(candidates, events)
     match_transcription_contexts(
@@ -1468,6 +1481,7 @@ def archive_once(args: argparse.Namespace, config: dict[str, Any]) -> int:
         min_size=args.min_size_mb * 1024 * 1024,
         since_days=args.since_days,
         ignore_before=parse_local_datetime(args.ignore_before),
+        min_stable_seconds=args.min_stable_seconds,
     )
     manifest = None if args.dry_run else Manifest(archive_dir)
     delete_after_upload = bool(config.get("delete_after_upload", False))
@@ -1821,6 +1835,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--archive-dir", help="Archive directory")
     parser.add_argument("--since-days", type=int, default=14)
     parser.add_argument("--min-size-mb", type=int, default=5)
+    parser.add_argument(
+        "--min-stable-seconds",
+        type=int,
+        default=DEFAULT_MIN_STABLE_SECONDS,
+        help=(
+            "Only process raw recordings whose modified time has been stable "
+            f"for at least this many seconds; default: {DEFAULT_MIN_STABLE_SECONDS}"
+        ),
+    )
     parser.add_argument("--ignore-before", help="Ignore raw recordings older than this ISO datetime")
     parser.add_argument("--fallback-page-id", help="Page ID to use when auto-resolution fails")
     sub = parser.add_subparsers(dest="command", required=True)

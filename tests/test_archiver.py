@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -95,6 +97,36 @@ class ArchiverTests(unittest.TestCase):
         self.assertIsNotNone(candidate.event)
         self.assertEqual(candidate.page_id, "page-1")
 
+    def test_transcription_match_accepts_exact_end_over_nearby_candidate(self) -> None:
+        candidate = arch.RawCandidate(
+            raw_path=Path("/tmp/raw"),
+            size=60 * arch.RAW_SAMPLE_RATE * arch.RAW_BYTES_PER_SAMPLE,
+            mtime=local_dt(10, 26, 8),
+            duration_seconds=1486.8,
+            expected_filename="Audio Recording 2026-06-04 at 10.26.08 AM.wav",
+        )
+        contexts = [
+            arch.TranscriptionContext(
+                block_id="block-1",
+                title=None,
+                started_at=local_dt(10, 1, 13),
+                ended_at=local_dt(10, 26, 8),
+                page_id="page-1",
+            ),
+            arch.TranscriptionContext(
+                block_id="block-2",
+                title=None,
+                started_at=local_dt(10, 0),
+                ended_at=local_dt(10, 26, 11),
+                page_id="page-2",
+            ),
+        ]
+
+        arch.match_transcription_contexts([candidate], contexts, Path("notion.db"))
+
+        self.assertIsNotNone(candidate.event)
+        self.assertEqual(candidate.page_id, "page-1")
+
     def test_find_archived_audio_block_by_marker(self) -> None:
         client = arch.NotionClient("test-token")
         raw_sha = "a" * 64
@@ -140,6 +172,29 @@ class ArchiverTests(unittest.TestCase):
         self.assertEqual(client.calls[1][0], "PATCH")
         self.assertTrue(client.calls[1][1].endswith("/children"))
         self.assertEqual(client.calls[2], ("DELETE", "/blocks/test-block-id", None))
+
+    def test_scan_raw_candidates_skips_recently_modified_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            notion_root = Path(tmp)
+            raw_root = notion_root / "File System" / "000" / "t" / "06"
+            raw_root.mkdir(parents=True)
+            size = 12 * arch.RAW_SAMPLE_RATE * arch.RAW_BYTES_PER_SAMPLE
+            recent = raw_root / "recent"
+            stable = raw_root / "stable"
+            recent.write_bytes(b"\0" * size)
+            stable.write_bytes(b"\0" * size)
+            now = time.time()
+            os.utime(recent, (now, now))
+            os.utime(stable, (now - 900, now - 900))
+
+            candidates = arch.scan_raw_candidates(
+                notion_root,
+                min_size=1,
+                since_days=1,
+                min_stable_seconds=600,
+            )
+
+            self.assertEqual([candidate.raw_path for candidate in candidates], [stable])
 
     def test_delete_local_archive_files_counts_only_existing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

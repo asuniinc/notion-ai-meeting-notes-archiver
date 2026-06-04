@@ -58,6 +58,7 @@ if [[ -f "$LAUNCH_AGENT" ]]; then
   ' "$LAUNCH_AGENT")"
 fi
 IGNORE_BEFORE="${IGNORE_BEFORE:-${EXISTING_IGNORE_BEFORE:-$("$PYTHON" -c 'import datetime as dt; print(dt.datetime.now().astimezone().isoformat(timespec="seconds"))')}}"
+MIN_STABLE_SECONDS="${MIN_STABLE_SECONDS:-600}"
 
 cat > "$LAUNCH_AGENT" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -79,6 +80,8 @@ cat > "$LAUNCH_AGENT" <<PLIST
     <string>$IGNORE_BEFORE</string>
     <string>--min-size-mb</string>
     <string>1</string>
+    <string>--min-stable-seconds</string>
+    <string>$MIN_STABLE_SECONDS</string>
     <string>watch</string>
     <string>--upload</string>
     <string>--interval</string>
