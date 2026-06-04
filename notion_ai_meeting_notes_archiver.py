@@ -15,11 +15,13 @@ import contextlib
 import dataclasses
 import datetime as dt
 import fcntl
+import getpass
 import hashlib
 import json
 import math
 import mimetypes
 import os
+import plistlib
 import re
 import shutil
 import sqlite3
@@ -43,9 +45,15 @@ DEFAULT_NOTION_DB = "~/Library/Application Support/Notion/notion.db"
 DEFAULT_ARCHIVE_DIR = (
     "~/Library/Application Support/Notion AI Meeting Notes Archiver/Archive"
 )
+DEFAULT_APP_DIR = "~/Library/Application Support/Notion AI Meeting Notes Archiver"
+DEFAULT_CONFIG_PATH = (
+    "~/Library/Application Support/Notion AI Meeting Notes Archiver/config.json"
+)
+DEFAULT_LOG_DIR = "~/Library/Logs/Notion AI Meeting Notes Archiver"
 DEFAULT_NOTION_VERSION = "2026-03-11"
 DEFAULT_KEYCHAIN_SERVICE = "notion-ai-meeting-notes-archiver"
 DEFAULT_WATCH_INTERVAL_SECONDS = 300
+LAUNCH_AGENT_LABEL = "com.local.notion-ai-meeting-notes-archiver"
 RAW_SAMPLE_RATE = 16_000
 RAW_CHANNELS = 1
 RAW_BYTES_PER_SAMPLE = 4
@@ -1337,6 +1345,32 @@ def load_config(path: Path | None) -> dict[str, Any]:
     return config
 
 
+def default_config() -> dict[str, Any]:
+    return {
+        "notion_root": DEFAULT_NOTION_ROOT,
+        "notion_db": DEFAULT_NOTION_DB,
+        "archive_dir": DEFAULT_ARCHIVE_DIR,
+        "notion_token_env": "NOTION_API_KEY",
+        "notion_token_keychain_service": DEFAULT_KEYCHAIN_SERVICE,
+        "notion_version": DEFAULT_NOTION_VERSION,
+        "delete_after_upload": True,
+        "fallback_page_id": None,
+    }
+
+
+def resolve_config_path(path: Path | None) -> Path:
+    return expand(path or DEFAULT_CONFIG_PATH)
+
+
+def ensure_config_file(path: Path) -> dict[str, Any]:
+    if path.exists():
+        return load_config(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config = default_config()
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    return config
+
+
 def notion_client_from_config(config: dict[str, Any]) -> NotionClient | None:
     env_name = config.get("notion_token_env", "NOTION_API_KEY")
     token = read_keychain_token(
@@ -1366,6 +1400,219 @@ def read_keychain_token(service: str | None) -> str | None:
         return None
     token = result.stdout.strip()
     return token or None
+
+
+def write_keychain_token(service: str, token: str) -> None:
+    result = subprocess.run(
+        [
+            "security",
+            "add-generic-password",
+            "-a",
+            os.environ.get("USER", getpass.getuser()),
+            "-s",
+            service,
+            "-w",
+            token,
+            "-U",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RuntimeError(f"could not save token to Keychain: {detail}")
+
+
+def choose_python() -> str:
+    if Path("/usr/bin/python3").exists():
+        return "/usr/bin/python3"
+    return sys.executable or shutil.which("python3") or "python3"
+
+
+def launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+
+
+def log_dir_path() -> Path:
+    return expand(DEFAULT_LOG_DIR)
+
+
+def log_paths() -> tuple[Path, Path]:
+    log_dir = log_dir_path()
+    return (
+        log_dir / "notion-ai-meeting-notes-archiver.out.log",
+        log_dir / "notion-ai-meeting-notes-archiver.err.log",
+    )
+
+
+def plist_program_arguments(path: Path | None = None) -> list[str]:
+    path = path or launch_agent_path()
+    if not path.exists():
+        return []
+    try:
+        with path.open("rb") as fh:
+            data = plistlib.load(fh)
+    except (OSError, plistlib.InvalidFileException):
+        return []
+    arguments = data.get("ProgramArguments", [])
+    return arguments if isinstance(arguments, list) else []
+
+
+def plist_argument_value(arguments: list[str], name: str) -> str | None:
+    try:
+        index = arguments.index(name)
+    except ValueError:
+        return None
+    if index + 1 >= len(arguments):
+        return None
+    return str(arguments[index + 1])
+
+
+def existing_ignore_before() -> str | None:
+    return plist_argument_value(plist_program_arguments(), "--ignore-before")
+
+
+def install_support_files(app_dir: Path) -> None:
+    source_dir = Path(__file__).resolve().parent
+    app_dir.mkdir(parents=True, exist_ok=True)
+    for name in [
+        "notion_ai_meeting_notes_archiver.py",
+        "config.example.json",
+        "README.md",
+        "DEVELOPMENT.md",
+    ]:
+        source = source_dir / name
+        if not source.exists():
+            continue
+        target = app_dir / name
+        try:
+            if source.samefile(target):
+                continue
+        except OSError:
+            pass
+        shutil.copy2(source, target)
+
+
+def write_launch_agent(
+    *,
+    python_path: str,
+    app_dir: Path,
+    config_path: Path,
+    ignore_before: str,
+    min_stable_seconds: int,
+    interval_seconds: int,
+) -> Path:
+    log_dir = log_dir_path()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    plist_path = launch_agent_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path, stderr_path = log_paths()
+    data = {
+        "Label": LAUNCH_AGENT_LABEL,
+        "ProgramArguments": [
+            python_path,
+            "-u",
+            str(app_dir / "notion_ai_meeting_notes_archiver.py"),
+            "--config",
+            str(config_path),
+            "--ignore-before",
+            ignore_before,
+            "--min-size-mb",
+            "1",
+            "--min-stable-seconds",
+            str(min_stable_seconds),
+            "watch",
+            "--upload",
+            "--interval",
+            str(interval_seconds),
+        ],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(stdout_path),
+        "StandardErrorPath": str(stderr_path),
+    }
+    with plist_path.open("wb") as fh:
+        plistlib.dump(data, fh, sort_keys=False)
+    return plist_path
+
+
+def run_checked(command: list[str], *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0 and not allow_failure:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RuntimeError(f"{' '.join(command)} failed: {detail}")
+    return result
+
+
+def restart_launch_agent(plist_path: Path) -> None:
+    domain = f"gui/{os.getuid()}"
+    run_checked(["plutil", "-lint", str(plist_path)])
+    run_checked(["launchctl", "bootout", domain, str(plist_path)], allow_failure=True)
+    run_checked(["launchctl", "bootstrap", domain, str(plist_path)])
+    run_checked(["launchctl", "kickstart", "-k", f"{domain}/{LAUNCH_AGENT_LABEL}"])
+
+
+def launch_agent_status() -> tuple[str, str]:
+    result = subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{LAUNCH_AGENT_LABEL}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "not loaded"
+        return "stopped", detail
+    for line in result.stdout.splitlines():
+        if "state =" in line:
+            return ("running" if "running" in line else "loaded", line.strip())
+    return "loaded", "loaded"
+
+
+def last_nonempty_line(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if line.strip():
+            return line.strip()
+    return None
+
+
+def uploaded_manifest_summary(archive_dir: Path) -> dict[str, Any]:
+    manifest_path = archive_dir / ".notion_meeting_notes_manifest.sqlite3"
+    if not manifest_path.exists():
+        return {"count": 0, "last": None}
+    try:
+        conn = sqlite3.connect(manifest_path)
+        conn.row_factory = sqlite3.Row
+        count = conn.execute(
+            "SELECT COUNT(*) FROM recordings WHERE uploaded_at IS NOT NULL"
+        ).fetchone()[0]
+        row = conn.execute(
+            """
+            SELECT uploaded_at, page_title, page_path, wav_path
+            FROM recordings
+            WHERE uploaded_at IS NOT NULL
+            ORDER BY uploaded_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return {"count": 0, "last": None}
+    return {"count": count, "last": dict(row) if row else None}
 
 
 def resolve_candidates(
@@ -1685,6 +1932,121 @@ def cleanup_uploaded_locked(args: argparse.Namespace, archive_dir: Path) -> int:
     return 0
 
 
+def setup_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    if sys.platform != "darwin":
+        print("FAIL: このツールはmacOS専用です。")
+        return 1
+
+    app_dir = expand(DEFAULT_APP_DIR)
+    config_path = resolve_config_path(args.config)
+    print("Notion AI Meeting Notes Archiver のセットアップを開始します。")
+
+    install_support_files(app_dir)
+    config = ensure_config_file(config_path)
+    service = config.get("notion_token_keychain_service", DEFAULT_KEYCHAIN_SERVICE)
+
+    token = os.environ.get("NOTION_PAT")
+    if not token and not read_keychain_token(service) and sys.stdin.isatty():
+        print("NotionのPersonal Access TokenをKeychainに保存します。")
+        token = getpass.getpass("Notion PATを貼り付けてください（入力は表示されません）: ").strip()
+    if token:
+        write_keychain_token(service, token)
+        print(f"OK: Keychain service '{service}' にNotion PATを保存しました。")
+    elif read_keychain_token(service):
+        print(f"OK: 既存のKeychain service '{service}' を使います。")
+    else:
+        print("WARN: Notion PATがまだ保存されていません。あとでsetupを再実行してください。")
+
+    test_page = args.test_page_url or args.test_page_id
+    if not test_page and not args.skip_page_test and sys.stdin.isatty():
+        test_page = input(
+            "書き込みテスト用のNotionページURLを貼ってください（省略可）: "
+        ).strip()
+
+    ignore_before = (
+        args.ignore_before
+        or existing_ignore_before()
+        or dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    )
+    plist_path = write_launch_agent(
+        python_path=choose_python(),
+        app_dir=app_dir,
+        config_path=config_path,
+        ignore_before=ignore_before,
+        min_stable_seconds=args.min_stable_seconds,
+        interval_seconds=args.interval,
+    )
+    print(f"OK: LaunchAgentを作成しました: {plist_path}")
+
+    if not args.no_start:
+        restart_launch_agent(plist_path)
+        print(f"OK: 常駐監視を開始しました（{args.interval}秒間隔）。")
+    else:
+        print("WARN: --no-start のため常駐監視は開始していません。")
+
+    doctor_args = argparse.Namespace(
+        notion_root=args.notion_root,
+        notion_db=args.notion_db,
+        archive_dir=args.archive_dir,
+        no_api=False,
+        test_page_id=test_page,
+    )
+    result = doctor_command(doctor_args, load_config(config_path))
+    if result == 0:
+        print("セットアップ完了です。次回以降は status で状態を確認できます。")
+    else:
+        print("セットアップは完了しましたが、確認項目に失敗があります。上のFAILを確認してください。")
+    return result
+
+
+def status_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    config_path = resolve_config_path(args.config)
+    if config_path.exists():
+        config = load_config(config_path)
+    else:
+        config = {**default_config(), **config}
+    notion_root = expand(args.notion_root or config.get("notion_root", DEFAULT_NOTION_ROOT))
+    notion_db = expand(args.notion_db or config.get("notion_db", DEFAULT_NOTION_DB))
+    archive_dir = expand(args.archive_dir or config.get("archive_dir", DEFAULT_ARCHIVE_DIR))
+    service = config.get("notion_token_keychain_service", DEFAULT_KEYCHAIN_SERVICE)
+    env_name = config.get("notion_token_env", "NOTION_API_KEY")
+    arguments = plist_program_arguments()
+    state, state_detail = launch_agent_status()
+    stdout_path, stderr_path = log_paths()
+    manifest = uploaded_manifest_summary(archive_dir)
+
+    print("Notion AI Meeting Notes Archiver status")
+    print(f"常駐: {'動作中' if state == 'running' else '停止中'} ({state_detail})")
+    if arguments:
+        interval = plist_argument_value(arguments, "--interval") or "-"
+        stable = plist_argument_value(arguments, "--min-stable-seconds") or "-"
+        print(f"監視間隔: {interval}秒")
+        print(f"録音安定待ち: {stable}秒")
+    else:
+        print("LaunchAgent: 未インストール")
+    print(f"設定ファイル: {config_path if config_path.exists() else '未作成'}")
+    print(f"Notionローカル保存先: {'OK' if notion_root.exists() else '見つかりません'}")
+    print(f"Notion DB: {'OK' if notion_db.exists() else '見つかりません'}")
+    if read_keychain_token(service):
+        print(f"Notion token: Keychain service '{service}'")
+    elif os.environ.get(env_name):
+        print(f"Notion token: 環境変数 '{env_name}'")
+    else:
+        print("Notion token: 未設定")
+
+    print(f"アップロード済み: {manifest['count']}件")
+    if manifest["last"]:
+        last = manifest["last"]
+        title = last.get("page_path") or last.get("page_title") or "-"
+        print(f"最終アップロード: {last.get('uploaded_at')}  {title}")
+
+    last_out = last_nonempty_line(stdout_path)
+    last_err = last_nonempty_line(stderr_path)
+    print(f"最新ログ: {last_out or 'なし'}")
+    print(f"最新エラー: {last_err or 'なし'}")
+    return 0
+
+
 def doctor_status(state: str, label: str, detail: str) -> None:
     print(f"{state}: {label}: {detail}")
 
@@ -1784,7 +2146,8 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
     elif token:
         doctor_status("WARN", "Notion API", "skipped by --no-api")
 
-    if args.test_page_id:
+    test_page_id = args.test_page_id or getattr(args, "test_page_url", None)
+    if test_page_id:
         if not token:
             doctor_status("FAIL", "Notion write test", "Notion token is missing")
             failures += 1
@@ -1793,7 +2156,7 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
             failures += 1
         elif client:
             try:
-                ok, detail = doctor_notion_write_test(client, args.test_page_id)
+                ok, detail = doctor_notion_write_test(client, test_page_id)
             except NotionApiError as exc:
                 ok = False
                 detail = str(exc).splitlines()[0]
@@ -1849,6 +2212,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fallback-page-id", help="Page ID to use when auto-resolution fails")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    setup = sub.add_parser("setup", help="Set up Keychain, config, and LaunchAgent")
+    setup.add_argument("--test-page-id", help="Notion page ID for a write test")
+    setup.add_argument("--test-page-url", help="Notion page URL for a write test")
+    setup.add_argument("--skip-page-test", action="store_true", help="Skip interactive page write test")
+    setup.add_argument("--no-start", action="store_true", help="Write files but do not start LaunchAgent")
+    setup.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_WATCH_INTERVAL_SECONDS,
+        help=f"Watcher interval in seconds; default: {DEFAULT_WATCH_INTERVAL_SECONDS}",
+    )
+
+    sub.add_parser("status", help="Show a friendly local status summary")
+
     scan = sub.add_parser("scan", help="List raw recording candidates")
     scan.add_argument("--json", action="store_true", help="Print JSON")
     scan.add_argument("--resolve", action="store_true", help="Resolve pages using Notion API")
@@ -1879,6 +2256,13 @@ def build_parser() -> argparse.ArgumentParser:
             "write access for a page ID or URL"
         ),
     )
+    doctor.add_argument(
+        "--test-page-url",
+        help=(
+            "Append and immediately archive a small paragraph to verify Notion "
+            "write access for a page URL"
+        ),
+    )
 
     watch = sub.add_parser("watch", help="Poll for new recordings")
     watch.add_argument("--include-unmatched", action="store_true")
@@ -1893,6 +2277,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "setup":
+        return setup_command(args, config)
+    if args.command == "status":
+        return status_command(args, config)
     if args.command == "scan":
         return scan_command(args, config)
     if args.command == "archive":

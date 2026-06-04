@@ -24,6 +24,9 @@ mkdir -p "$APP_DIR" "$LOG_DIR" "$HOME/Library/LaunchAgents"
 cp "$SOURCE_DIR/notion_ai_meeting_notes_archiver.py" "$APP_DIR/"
 cp "$SOURCE_DIR/config.example.json" "$APP_DIR/config.example.json"
 cp "$SOURCE_DIR/README.md" "$APP_DIR/README.md"
+if [[ -f "$SOURCE_DIR/DEVELOPMENT.md" ]]; then
+  cp "$SOURCE_DIR/DEVELOPMENT.md" "$APP_DIR/DEVELOPMENT.md"
+fi
 
 if [[ ! -f "$APP_DIR/config.json" ]]; then
   cp "$SOURCE_DIR/config.example.json" "$APP_DIR/config.json"

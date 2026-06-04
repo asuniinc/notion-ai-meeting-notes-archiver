@@ -196,6 +196,66 @@ class ArchiverTests(unittest.TestCase):
 
             self.assertEqual([candidate.raw_path for candidate in candidates], [stable])
 
+    def test_plist_argument_value_extracts_option_value(self) -> None:
+        arguments = [
+            "/usr/bin/python3",
+            "script.py",
+            "--min-stable-seconds",
+            "600",
+            "watch",
+            "--interval",
+            "300",
+        ]
+
+        self.assertEqual(arch.plist_argument_value(arguments, "--interval"), "300")
+        self.assertEqual(
+            arch.plist_argument_value(arguments, "--min-stable-seconds"),
+            "600",
+        )
+        self.assertIsNone(arch.plist_argument_value(arguments, "--missing"))
+
+    def test_uploaded_manifest_summary_returns_latest_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_dir = Path(tmp)
+            manifest = arch.Manifest(archive_dir)
+            base = {
+                "raw_path": "/tmp/raw",
+                "raw_size": 1,
+                "raw_mtime": 1.0,
+                "wav_path": "/tmp/a.wav",
+                "metadata_path": "/tmp/a.json",
+                "recorded_at": "2026-06-04T10:00:00+09:00",
+                "duration_seconds": 60,
+                "expected_filename": "a.wav",
+                "page_id": "page-1",
+                "page_title": "First",
+                "page_path": "First",
+                "page_url": None,
+                "file_upload_id": "upload-1",
+                "uploaded_block_id": "block-1",
+            }
+            manifest.upsert(
+                {
+                    **base,
+                    "raw_sha256": "a" * 64,
+                    "uploaded_at": "2026-06-04T10:01:00+09:00",
+                }
+            )
+            manifest.upsert(
+                {
+                    **base,
+                    "raw_sha256": "b" * 64,
+                    "page_title": "Second",
+                    "page_path": "Second",
+                    "uploaded_at": "2026-06-04T10:02:00+09:00",
+                }
+            )
+
+            summary = arch.uploaded_manifest_summary(archive_dir)
+
+            self.assertEqual(summary["count"], 2)
+            self.assertEqual(summary["last"]["page_title"], "Second")
+
     def test_delete_local_archive_files_counts_only_existing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

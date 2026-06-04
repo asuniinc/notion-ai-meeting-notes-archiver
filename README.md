@@ -1,299 +1,154 @@
 # Notion AI Meeting Notes Archiver
 
-Notion AI Meeting Notes のローカル録音データを復元し、該当するNotionページへ音声ファイルとしてアップロードするためのツールです。
+Notion AI Meeting Notes の録音を、該当するNotionページへ音声ファイルとして自動アップロードするmacOS専用ツールです。
+
+## できること
+
+- Notionデスクトップアプリに一時保存された録音を見つけます。
+- 録音をWAVファイルとして復元します。
+- 対応するNotionページを自動で推定します。
+- Notionページへ音声ブロックとしてアップロードします。
+- 同じ録音を繰り返しアップロードしないようにします。
 
 ## 対応環境
 
 このツールは **macOS専用** です。Windowsでは動きません。
 
-理由:
+使っているmacOS機能:
 
-- NotionデスクトップアプリのmacOSローカル保存先を前提にしています。
-- 認証トークンの保存にmacOS Keychainを使います。
-- 常駐実行にmacOSのLaunchAgent/launchdを使います。
-- インストール/アンインストールスクリプトはzshとmacOS標準コマンドを前提にしています。
+- Notionデスクトップアプリのローカル保存先
+- macOS Keychain
+- LaunchAgent
 
-## 利用時の前提
+## はじめに
 
-- 各ユーザーが自分のNotion Personal Access Token (PAT) を作成します。
-- PATはLaunchAgent plistではなく、macOS Keychainに保存します。
-- PATは作成したユーザー本人の権限で動くため、Notion AI Meeting Notes がプライベートページに作られても、都度bot connectionへ共有する必要がありません。
-- `config.json`、生成されたLaunchAgent plist、ログ、ローカルWAV、manifest DBはコミットしないでください。
+### 1. NotionのPATを用意する
+
+NotionのPersonal Access Token (PAT) を作成します。
 
 Notion PAT docs: https://developers.notion.com/guides/get-started/personal-access-tokens
 
-## 何をするツールか
+作成したPATはあとでセットアップ中に貼り付けます。PATはmacOS Keychainに保存され、設定ファイルやLaunchAgentには書き込まれません。
 
-1. Notionデスクトップアプリのローカル保存先をスキャンします。
+### 2. セットアップする
 
-   ```text
-   ~/Library/Application Support/Notion/Partitions/notion/File System/000/t
-   ```
+一番簡単な方法は、`setup.command` をダブルクリックすることです。
 
-2. Notion AI Meeting Notes のraw音声データを検出します。
-
-   ```text
-   32-bit float little-endian
-   mono
-   16000 Hz
-   WAVヘッダーなし
-   ```
-
-3. raw音声を `.wav` ファイルとして復元します。
-
-4. Notionのローカル `notion.db` のスナップショットを読み、`audio` ブロックや `transcription` ブロックから該当ページを推定します。
-
-5. Notion File Upload APIを使って、該当ページへ音声ブロックとしてアップロードします。
-
-6. Notionページ側にraw音声のSHA-256を含むアーカイブマーカーを残します。Notionへの追加後、ローカルmanifest更新前にプロセスが落ちても、次回実行時にページ側マーカーを見つけて重複アップロードを避けます。
-
-7. ローカルSQLite manifestを保持し、同じ録音を再生成・再アップロードしないようにします。
-
-## インストール
-
-このリポジトリのディレクトリで実行します。
+ターミナルから実行する場合:
 
 ```bash
-./scripts/install.sh
+python3 notion_ai_meeting_notes_archiver.py setup
 ```
 
-インストーラが行うこと:
+セットアップで行うこと:
 
-- アプリを `~/Library/Application Support/Notion AI Meeting Notes Archiver` にコピーします。
-- Notion PATの入力を求め、Keychain service `notion-ai-meeting-notes-archiver` に保存します。
-- `~/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist` を作成します。
-- 5分間隔の常駐監視を開始します。
-- `doctor` を実行してセットアップ状態を確認します。
+- macOS上で必要なファイルを配置します。
+- Notion PATをKeychainへ保存します。
+- 5分おきに動く常駐監視を設定します。
+- Notion APIとローカル環境を確認します。
+- 任意で、指定したNotionページへテスト書き込みします。
 
-初回インストール時は `--ignore-before` にインストール時刻を設定します。これにより、過去の録音が初回起動で意図せず大量アップロードされることを防ぎます。再インストール時は既存の `--ignore-before` を引き継ぎます。明示的に変えたい場合は `IGNORE_BEFORE` を指定してください。
-
-LaunchAgentは `--min-size-mb 1` で動きます。短いテスト録音も検出するためです。録音中のrawファイルを途中でアップロードしないよう、最終更新から600秒以上たって安定したファイルだけを処理します。明示的に変えたい場合は `MIN_STABLE_SECONDS` を指定してください。
-
-非対話実行では、`NOTION_PAT` を設定してからインストーラを実行できます。未設定の場合は既存のKeychain tokenをそのまま使います。
+テスト書き込みも同時に行う場合:
 
 ```bash
-NOTION_PAT="ntn_..." ./scripts/install.sh
+python3 notion_ai_meeting_notes_archiver.py setup --test-page-url "https://www.notion.so/..."
 ```
 
-Pythonは `/usr/bin/python3` を優先して使います。別のPythonを使いたい場合は `PYTHON` で指定してください。
+## 状態確認
+
+動いているか確認するには:
 
 ```bash
-PYTHON=/path/to/python3 ./scripts/install.sh
-```
-
-## セットアップ確認
-
-```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json doctor
-```
-
-Notion APIへの疎通確認を省略する場合:
-
-```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json doctor --no-api
-```
-
-`doctor` は状態とKeychain service名だけを表示します。トークン値は表示しません。
-
-指定したNotionページへ実際に書き込みできるか確認する場合:
-
-```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json doctor --test-page-id <NotionページIDまたはURL>
-```
-
-このチェックは小さなテスト用paragraphを追加し、すぐarchiveします。ページへのappend権限まで確認したいときに使います。
-
-## 更新方法
-
-このリポジトリを更新して、インストール先とLaunchAgentへ反映します。
-
-```bash
-cd /path/to/notion-ai-meeting-notes-archiver
-git pull
-./scripts/install.sh
-```
-
-`install.sh` は既存のKeychain tokenと `--ignore-before` を引き継ぎます。更新後は次を確認してください。
-
-```bash
-python3 notion_ai_meeting_notes_archiver.py --config "$HOME/Library/Application Support/Notion AI Meeting Notes Archiver/config.json" doctor
-```
-
-必要に応じて、テスト用ページへの書き込み確認も行います。
-
-```bash
-python3 notion_ai_meeting_notes_archiver.py \
-  --config "$HOME/Library/Application Support/Notion AI Meeting Notes Archiver/config.json" \
-  doctor \
-  --test-page-id <NotionページIDまたはURL>
-```
-
-## 再起動後確認
-
-Mac再起動後は、LaunchAgentが自動起動しているか確認します。
-
-```bash
-launchctl print "gui/$(id -u)/com.local.notion-ai-meeting-notes-archiver"
+python3 notion_ai_meeting_notes_archiver.py status
 ```
 
 見るポイント:
 
-- `state = running`
-- `program = /usr/bin/python3`
-- `--min-size-mb 1` が引数に含まれている
-- `--min-stable-seconds 600` が引数に含まれている
-- `--interval 300` が引数に含まれている
-- stderrログが空、または新しいTracebackがない
+- `常駐: 動作中`
+- `監視間隔: 300秒`
+- `録音安定待ち: 600秒`
+- `最新エラー: なし`
 
-ログ確認:
+詳しく確認するには:
 
 ```bash
-tail -n 100 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.out.log"
-tail -n 100 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.err.log"
+python3 notion_ai_meeting_notes_archiver.py doctor
 ```
 
-再起動後に短いテスト録音を作り、該当Notionページに音声が追加されることも確認してください。
-
-## 手動コマンド
-
-最近の候補をスキャン:
+指定ページへ実際に書き込みできるか確認するには:
 
 ```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json --since-days 7 scan
+python3 notion_ai_meeting_notes_archiver.py doctor --test-page-url "https://www.notion.so/..."
 ```
 
-1回だけアーカイブしてアップロード:
+## 使い方
+
+セットアップ後は、基本的に何もしなくて大丈夫です。Notion AI Meeting Notesで録音すると、録音終了後しばらくしてから該当ページへ音声ファイルが追加されます。
+
+現在の標準設定:
+
+- 5分おきに確認します。
+- 録音中のファイルを誤ってアップロードしないよう、最終更新から600秒待ちます。
+- アップロード成功後、復元したローカルWAVは削除します。
+
+## 更新
+
+リポジトリを更新してから、もう一度セットアップします。
 
 ```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json archive --upload
+git pull
+python3 notion_ai_meeting_notes_archiver.py setup
 ```
 
-常駐監視:
+既存のKeychain tokenと初回起動時刻は引き継がれます。
+
+## 困ったとき
+
+### 動いているか分からない
 
 ```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json watch --upload --interval 300
+python3 notion_ai_meeting_notes_archiver.py status
 ```
 
-アップロード済みmanifestレコードのローカルWAV/metadataを削除:
+`最新エラー` に何か出ている場合は、その内容を共有してください。
+
+### Notion tokenが未設定と表示される
+
+もう一度セットアップしてください。
 
 ```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json cleanup-uploaded
+python3 notion_ai_meeting_notes_archiver.py setup
 ```
-
-## 設定
-
-ローカル開発時は `config.example.json` をコピーして `config.json` を作ります。
-
-```json
-{
-  "notion_root": "~/Library/Application Support/Notion/Partitions/notion",
-  "notion_db": "~/Library/Application Support/Notion/notion.db",
-  "archive_dir": "~/Library/Application Support/Notion AI Meeting Notes Archiver/Archive",
-  "notion_token_env": "NOTION_API_KEY",
-  "notion_token_keychain_service": "notion-ai-meeting-notes-archiver",
-  "notion_version": "2026-03-11",
-  "delete_after_upload": true,
-  "fallback_page_id": null
-}
-```
-
-トークンの探索順:
-
-1. `notion_token_keychain_service` で指定されたmacOS Keychain generic password
-2. `notion_token_env` で指定された環境変数
-
-環境変数は開発用のフォールバックです。通常はKeychainを使ってください。
-
-## 安全上の注意
-
-- このツールは、該当ページを特定するためにNotionデスクトップアプリのローカルデータを読みます。
-- `delete_after_upload` がtrueの場合、復元したローカルWAVはアップロード成功後に削除されます。
-- manifest DBは重複処理を防ぐためにarchive directoryへ残ります。
-- transcription blockによるページ推定は保守的です。近い時刻に複数候補がある場合は、推測でアップロードせずスキップします。
-- archive directoryごとに同時実行は1プロセスだけです。LaunchAgent処理中に手動実行すると、手動側はスキップされることがあります。
-- PATをplistへ貼った、コミットした、ログに出した、ターミナルに表示した可能性がある場合は、NotionでそのPATをrevokeし、新しいPATを発行してください。
-
-## トラブルシュート
-
-### `doctor` でNotion tokenが見つからない
-
-KeychainにPATが保存されていません。もう一度インストーラを実行してPATを入力してください。
-
-```bash
-./scripts/install.sh
-```
-
-非対話実行の場合:
-
-```bash
-NOTION_PAT="ntn_..." ./scripts/install.sh
-```
-
-### `doctor --test-page-id` が失敗する
-
-指定したページID/URLが正しいか、PATを作ったユーザーがそのページに書き込めるかを確認してください。PATが無効な場合はNotionで再発行し、Keychainへ保存し直してください。
-
-### LaunchAgentが動いていない
-
-plistが存在するか確認します。
-
-```bash
-ls "$HOME/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist"
-```
-
-再インストールします。
-
-```bash
-./scripts/install.sh
-```
-
-### ログにTracebackが出る
-
-stderrログを確認します。
-
-```bash
-tail -n 200 "$HOME/Library/Logs/Notion AI Meeting Notes Archiver/notion-ai-meeting-notes-archiver.err.log"
-```
-
-更新後のバグ修正で解決している可能性があるため、まず `git pull && ./scripts/install.sh` を試してください。
 
 ### 録音したのにアップロードされない
 
-- 録音が10秒未満だと対象外です。
-- LaunchAgentの引数に `--min-size-mb 1` が入っているか確認してください。
-- 録音終了直後のファイルは未完成扱いになり、デフォルトで最終更新から600秒待ってから処理されます。手動検証で早めたい場合は `--min-stable-seconds` を小さくしてください。
-- NotionのローカルDB反映に時間がかかることがあります。数分待ってログを確認してください。
-- `doctor --test-page-id` でページへの書き込み権限を確認してください。
+- 録音終了直後は600秒待ちます。
+- NotionデスクトップアプリのローカルDB反映に数分かかることがあります。
+- `status` で `最新エラー` を確認してください。
+- `doctor --test-page-url` で、Notionページへ書き込めるか確認してください。
 
-### PC負荷が高い
+### 常駐を再起動したい
 
-通常時はCPUほぼ0%、メモリは数十MB程度です。CPUが継続的に高い場合はstderrログに例外が出ていないか確認し、最新版へ更新してください。
+```bash
+python3 notion_ai_meeting_notes_archiver.py setup
+```
 
 ## アンインストール
+
+常駐を止めるだけなら:
 
 ```bash
 ./scripts/uninstall.sh
 ```
 
-インストール済みアプリディレクトリとKeychain tokenも削除する場合:
+アプリ本体、archive、manifest、Keychain tokenも削除するなら:
 
 ```bash
 ./scripts/uninstall.sh --purge
 ```
 
-`--purge` を付けない場合、archiveは削除しません。
+`--purge` を付けない場合、archive、manifest、Keychain tokenは削除しません。
 
-## 開発時の確認
+## 詳細情報
 
-```bash
-python3 -m py_compile notion_ai_meeting_notes_archiver.py tests/test_archiver.py
-python3 -m unittest discover -s tests
-plutil -lint launchd/com.local.notion-ai-meeting-notes-archiver.plist.template
-```
-
-## 現在の制限
-
-- macOS専用です。Windows/Linuxには対応していません。
-- Notionデスクトップアプリの内部保存形式に依存しています。Notion側の実装が変わると更新が必要になる可能性があります。
-- File Upload自体は完了したが、その後の音声ブロック追加前に失敗した場合、Notion側に未紐付けのfile uploadが残る可能性があります。次回実行で再アップロードされますが、ページ側マーカーがある限り重複ブロックは作りません。
-- `--force` はローカル/リモートの重複チェックを意図的に無視します。
+開発者向けの仕組み、設定ファイル、手動コマンド、テスト方法は [DEVELOPMENT.md](DEVELOPMENT.md) を見てください。

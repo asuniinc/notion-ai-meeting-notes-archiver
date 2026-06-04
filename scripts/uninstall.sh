@@ -12,7 +12,9 @@ rm -f "$LAUNCH_AGENT"
 if [[ "${1:-}" == "--purge" ]]; then
   rm -rf "$APP_DIR"
   security delete-generic-password -s "$SERVICE" 2>/dev/null || true
+  print "Removed app directory and Keychain token."
+else
+  print "Kept app directory, archive, manifest, and Keychain token."
 fi
 
 print "Uninstalled $LABEL."
-print "Local audio archive under ~/Documents is not removed by this script."
