@@ -62,7 +62,7 @@ Notion PAT docs: https://developers.notion.com/guides/get-started/personal-acces
 - アプリを `~/Library/Application Support/Notion AI Meeting Notes Archiver` にコピーします。
 - Notion PATの入力を求め、Keychain service `notion-ai-meeting-notes-archiver` に保存します。
 - `~/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist` を作成します。
-- 60秒間隔の常駐監視を開始します。
+- 5分間隔の常駐監視を開始します。
 - `doctor` を実行してセットアップ状態を確認します。
 
 初回インストール時は `--ignore-before` にインストール時刻を設定します。これにより、過去の録音が初回起動で意図せず大量アップロードされることを防ぎます。再インストール時は既存の `--ignore-before` を引き継ぎます。明示的に変えたい場合は `IGNORE_BEFORE` を指定してください。
@@ -142,6 +142,7 @@ launchctl print "gui/$(id -u)/com.local.notion-ai-meeting-notes-archiver"
 - `program = /usr/bin/python3`
 - `--min-size-mb 1` が引数に含まれている
 - `--min-stable-seconds 600` が引数に含まれている
+- `--interval 300` が引数に含まれている
 - stderrログが空、または新しいTracebackがない
 
 ログ確認:
@@ -170,7 +171,7 @@ python3 notion_ai_meeting_notes_archiver.py --config config.json archive --uploa
 常駐監視:
 
 ```bash
-python3 notion_ai_meeting_notes_archiver.py --config config.json watch --upload --interval 60
+python3 notion_ai_meeting_notes_archiver.py --config config.json watch --upload --interval 300
 ```
 
 アップロード済みmanifestレコードのローカルWAV/metadataを削除:

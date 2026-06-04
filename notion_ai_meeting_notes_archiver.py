@@ -45,6 +45,7 @@ DEFAULT_ARCHIVE_DIR = (
 )
 DEFAULT_NOTION_VERSION = "2026-03-11"
 DEFAULT_KEYCHAIN_SERVICE = "notion-ai-meeting-notes-archiver"
+DEFAULT_WATCH_INTERVAL_SECONDS = 300
 RAW_SAMPLE_RATE = 16_000
 RAW_CHANNELS = 1
 RAW_BYTES_PER_SAMPLE = 4
@@ -1884,7 +1885,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--force", action="store_true")
     watch.add_argument("--dry-run", action="store_true")
     watch.add_argument("--upload", action="store_true")
-    watch.add_argument("--interval", type=int, default=60)
+    watch.add_argument("--interval", type=int, default=DEFAULT_WATCH_INTERVAL_SECONDS)
     return parser
 
 
