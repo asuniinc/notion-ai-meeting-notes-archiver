@@ -7,7 +7,7 @@
 1. Notionデスクトップアプリのローカル保存先をスキャンします。
 
    ```text
-   ~/Library/Application Support/Notion/Partitions/notion/File System/000/t
+   ~/Library/Application Support/Notion/Partitions/notion/File System/*/t
    ```
 
 2. Notion AI Meeting Notes のraw音声データを検出します。
@@ -66,6 +66,8 @@
 ```text
 ~/Library/LaunchAgents/com.local.notion-ai-meeting-notes-archiver.plist
 ```
+
+NotionのローカルFile Systemは `000/t`、`001/t` のように複数作られることがあります。録音rawは `File System/*/t` をすべてスキャンします。
 
 標準引数:
 

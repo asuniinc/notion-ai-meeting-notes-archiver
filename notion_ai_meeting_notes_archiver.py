@@ -1116,12 +1116,28 @@ def iter_files(root: Path) -> Iterable[Path]:
             continue
 
 
+def recording_store_roots(notion_root: Path) -> list[Path]:
+    file_system = notion_root / "File System"
+    if not file_system.exists():
+        return []
+    roots: list[Path] = []
+    try:
+        children = sorted(file_system.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    for child in children:
+        root = child / "t"
+        if root.is_dir():
+            roots.append(root)
+    return roots
+
+
 def extract_events(notion_root: Path, since_days: int) -> list[RecordingEvent]:
     roots = [
         notion_root / "IndexedDB",
         notion_root / "Service Worker" / "CacheStorage",
-        notion_root / "File System" / "000" / "t" / "Paths",
     ]
+    roots.extend(root / "Paths" for root in recording_store_roots(notion_root))
     cutoff = time.time() - since_days * 24 * 60 * 60
     events_by_key: dict[tuple[str, int], RecordingEvent] = {}
     for root in roots:
@@ -1168,38 +1184,39 @@ def scan_raw_candidates(
     ignore_before: dt.datetime | None = None,
     min_stable_seconds: int = DEFAULT_MIN_STABLE_SECONDS,
 ) -> list[RawCandidate]:
-    raw_root = notion_root / "File System" / "000" / "t"
+    raw_roots = recording_store_roots(notion_root)
     now_ts = time.time()
     cutoff = time.time() - since_days * 24 * 60 * 60
     if ignore_before:
         cutoff = max(cutoff, ignore_before.timestamp())
     candidates: list[RawCandidate] = []
-    if not raw_root.exists():
+    if not raw_roots:
         return candidates
-    for path in iter_files(raw_root):
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        relative_parts = path.relative_to(raw_root).parts
-        if path.name.startswith(".") or "Paths" in relative_parts:
-            continue
-        if stat.st_mtime < cutoff:
-            continue
-        if min_stable_seconds > 0 and now_ts - stat.st_mtime < min_stable_seconds:
-            continue
-        if not is_plausible_raw_pcm(path, min_size=min_size):
-            continue
-        mtime = local_datetime_from_ts(stat.st_mtime).replace(microsecond=0)
-        candidates.append(
-            RawCandidate(
-                raw_path=path,
-                size=stat.st_size,
-                mtime=mtime,
-                duration_seconds=raw_duration_seconds(stat.st_size),
-                expected_filename=audio_recording_name_from_dt(mtime),
+    for raw_root in raw_roots:
+        for path in iter_files(raw_root):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            relative_parts = path.relative_to(raw_root).parts
+            if path.name.startswith(".") or "Paths" in relative_parts:
+                continue
+            if stat.st_mtime < cutoff:
+                continue
+            if min_stable_seconds > 0 and now_ts - stat.st_mtime < min_stable_seconds:
+                continue
+            if not is_plausible_raw_pcm(path, min_size=min_size):
+                continue
+            mtime = local_datetime_from_ts(stat.st_mtime).replace(microsecond=0)
+            candidates.append(
+                RawCandidate(
+                    raw_path=path,
+                    size=stat.st_size,
+                    mtime=mtime,
+                    duration_seconds=raw_duration_seconds(stat.st_size),
+                    expected_filename=audio_recording_name_from_dt(mtime),
+                )
             )
-        )
     return sorted(candidates, key=lambda item: item.mtime)
 
 
@@ -2008,6 +2025,7 @@ def status_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
     notion_root = expand(args.notion_root or config.get("notion_root", DEFAULT_NOTION_ROOT))
     notion_db = expand(args.notion_db or config.get("notion_db", DEFAULT_NOTION_DB))
     archive_dir = expand(args.archive_dir or config.get("archive_dir", DEFAULT_ARCHIVE_DIR))
+    recording_roots = recording_store_roots(notion_root)
     service = config.get("notion_token_keychain_service", DEFAULT_KEYCHAIN_SERVICE)
     env_name = config.get("notion_token_env", "NOTION_API_KEY")
     arguments = plist_program_arguments()
@@ -2025,7 +2043,10 @@ def status_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
     else:
         print("LaunchAgent: 未インストール")
     print(f"設定ファイル: {config_path if config_path.exists() else '未作成'}")
-    print(f"Notionローカル保存先: {'OK' if notion_root.exists() else '見つかりません'}")
+    if recording_roots:
+        print(f"Notion録音保存先: OK ({len(recording_roots)}個)")
+    else:
+        print("Notion録音保存先: 見つかりません")
     print(f"Notion DB: {'OK' if notion_db.exists() else '見つかりません'}")
     if read_keychain_token(service):
         print(f"Notion token: Keychain service '{service}'")
@@ -2077,7 +2098,7 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
     notion_root = expand(args.notion_root or config.get("notion_root", DEFAULT_NOTION_ROOT))
     notion_db = expand(args.notion_db or config.get("notion_db", DEFAULT_NOTION_DB))
     archive_dir = expand(args.archive_dir or config.get("archive_dir", DEFAULT_ARCHIVE_DIR))
-    raw_root = notion_root / "File System" / "000" / "t"
+    recording_roots = recording_store_roots(notion_root)
     failures = 0
 
     if notion_root.exists():
@@ -2086,10 +2107,15 @@ def doctor_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
         doctor_status("FAIL", "Notion root", f"missing: {notion_root}")
         failures += 1
 
-    if raw_root.exists():
-        doctor_status("OK", "Local recording store", str(raw_root))
+    if recording_roots:
+        detail = ", ".join(str(root) for root in recording_roots)
+        doctor_status("OK", "Local recording stores", detail)
     else:
-        doctor_status("FAIL", "Local recording store", f"missing: {raw_root}")
+        doctor_status(
+            "FAIL",
+            "Local recording stores",
+            f"missing: {notion_root / 'File System' / '*' / 't'}",
+        )
         failures += 1
 
     if notion_db.exists():

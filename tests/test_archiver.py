@@ -177,15 +177,20 @@ class ArchiverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             notion_root = Path(tmp)
             raw_root = notion_root / "File System" / "000" / "t" / "06"
+            second_raw_root = notion_root / "File System" / "001" / "t" / "31"
             raw_root.mkdir(parents=True)
+            second_raw_root.mkdir(parents=True)
             size = 12 * arch.RAW_SAMPLE_RATE * arch.RAW_BYTES_PER_SAMPLE
             recent = raw_root / "recent"
             stable = raw_root / "stable"
+            second_stable = second_raw_root / "second-stable"
             recent.write_bytes(b"\0" * size)
             stable.write_bytes(b"\0" * size)
+            second_stable.write_bytes(b"\0" * size)
             now = time.time()
             os.utime(recent, (now, now))
             os.utime(stable, (now - 900, now - 900))
+            os.utime(second_stable, (now - 800, now - 800))
 
             candidates = arch.scan_raw_candidates(
                 notion_root,
@@ -194,7 +199,20 @@ class ArchiverTests(unittest.TestCase):
                 min_stable_seconds=600,
             )
 
-            self.assertEqual([candidate.raw_path for candidate in candidates], [stable])
+            self.assertEqual(
+                [candidate.raw_path for candidate in candidates],
+                [stable, second_stable],
+            )
+
+    def test_recording_store_roots_discovers_multiple_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            notion_root = Path(tmp)
+            first = notion_root / "File System" / "000" / "t"
+            second = notion_root / "File System" / "001" / "t"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+
+            self.assertEqual(arch.recording_store_roots(notion_root), [first, second])
 
     def test_plist_argument_value_extracts_option_value(self) -> None:
         arguments = [
